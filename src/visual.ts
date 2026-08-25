@@ -32,6 +32,7 @@ interface MarkerSeriesInfo {
 
 interface ParsedData {
     categories: string[];
+    categoryDisplayName: string;
     barSeries: BarSeriesInfo[];
     markerSeries: MarkerSeriesInfo | null;
 }
@@ -159,7 +160,7 @@ export class Visual implements IVisual {
             }
         });
 
-        return { categories, barSeries, markerSeries };
+        return { categories, categoryDisplayName: categoryColumn.source.displayName, barSeries, markerSeries };
     }
 
     private getSeriesColor(column: DataViewValueColumn, index: number): string {
@@ -213,6 +214,17 @@ export class Visual implements IVisual {
         const legendFontSize = legend.fontSize.value;
         const showLegend = legend.show.value && legendItems.length > 0;
 
+        // ---- default axis titles: the bound column name(s), same as Power BI's built-in visuals ----
+        const defaultCategoryAxisTitle = parsed.categoryDisplayName;
+        const defaultValueAxisTitle = [
+            ...barSeries.map(s => s.displayName),
+            ...(showMarker && markerSeries ? [markerSeries.displayName] : [])
+        ].join(", ");
+        catAxis.titleText.placeholder = defaultCategoryAxisTitle || "Category";
+        valAxis.titleText.placeholder = defaultValueAxisTitle || "Value";
+        const categoryAxisTitle = catAxis.titleText.value || defaultCategoryAxisTitle;
+        const valueAxisTitle = valAxis.titleText.value || defaultValueAxisTitle;
+
         // ---- reserve space for legend ----
         let legendBandHeight = 0;
         let legendRightWidth = 0;
@@ -229,13 +241,13 @@ export class Visual implements IVisual {
         const marginRight = 14 + legendRightWidth;
         const marginTop = 8 + (showLegend && legendPosition === "Top" ? legendBandHeight : 0);
 
-        const valueAxisTitleSpace = (valAxis.show.value && valAxis.showTitle.value && valAxis.titleText.value) ? 20 : 0;
+        const valueAxisTitleSpace = (valAxis.show.value && valAxis.showTitle.value && valueAxisTitle) ? 20 : 0;
         const marginBottom = 8
             + (showLegend && legendPosition === "Bottom" ? legendBandHeight : 0)
             + (valAxis.show.value ? valAxis.fontSize.value + 14 : 4)
             + valueAxisTitleSpace;
 
-        const categoryAxisTitleSpace = (catAxis.show.value && catAxis.showTitle.value && catAxis.titleText.value) ? 18 : 0;
+        const categoryAxisTitleSpace = (catAxis.show.value && catAxis.showTitle.value && categoryAxisTitle) ? 18 : 0;
         const maxCategoryLabelLength = Math.max(0, ...categories.map(c => c.length));
         const marginLeft = categoryAxisTitleSpace
             + (catAxis.show.value ? Math.min(160, Math.max(40, maxCategoryLabelLength * catAxis.fontSize.value * 0.62)) : 8)
@@ -390,23 +402,23 @@ export class Visual implements IVisual {
         }
 
         // ---- axis titles ----
-        if (valAxis.show.value && valAxis.showTitle.value && valAxis.titleText.value) {
+        if (valAxis.show.value && valAxis.showTitle.value && valueAxisTitle) {
             this.titlesGroup.append("text")
                 .attr("x", (plotLeft + plotRight) / 2)
                 .attr("y", height - 4)
                 .attr("text-anchor", "middle")
                 .style("font-size", `${valAxis.fontSize.value}px`)
                 .style("fill", valAxis.fontColor.value.value)
-                .text(valAxis.titleText.value);
+                .text(valueAxisTitle);
         }
 
-        if (catAxis.show.value && catAxis.showTitle.value && catAxis.titleText.value) {
+        if (catAxis.show.value && catAxis.showTitle.value && categoryAxisTitle) {
             this.titlesGroup.append("text")
                 .attr("transform", `translate(10, ${(plotTop + plotBottom) / 2}) rotate(-90)`)
                 .attr("text-anchor", "middle")
                 .style("font-size", `${catAxis.fontSize.value}px`)
                 .style("fill", catAxis.fontColor.value.value)
-                .text(catAxis.titleText.value);
+                .text(categoryAxisTitle);
         }
 
         // ---- legend ----

@@ -121,7 +121,7 @@ class CategoryAxisCardSettings extends FormattingSettingsCard {
     showTitle = new formattingSettings.ToggleSwitch({
         name: "showTitle",
         displayName: "Show axis title",
-        value: false
+        value: true
     });
 
     titleText = new formattingSettings.TextInput({
@@ -161,7 +161,7 @@ class ValueAxisCardSettings extends FormattingSettingsCard {
     showTitle = new formattingSettings.ToggleSwitch({
         name: "showTitle",
         displayName: "Show axis title",
-        value: false
+        value: true
     });
 
     titleText = new formattingSettings.TextInput({
