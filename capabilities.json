@@ -67,7 +67,8 @@
                             { "value": "triangle", "displayName": "Triangle" },
                             { "value": "diamond", "displayName": "Diamond" },
                             { "value": "cross", "displayName": "Cross" },
-                            { "value": "star", "displayName": "Star" }
+                            { "value": "star", "displayName": "Star" },
+                            { "value": "line", "displayName": "Line" }
                         ]
                     }
                 },

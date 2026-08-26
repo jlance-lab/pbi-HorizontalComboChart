@@ -13,7 +13,8 @@ export const MARKER_SHAPE_ITEMS: powerbi.IEnumMember[] = [
     { value: "triangle", displayName: "Triangle" },
     { value: "diamond", displayName: "Diamond" },
     { value: "cross", displayName: "Cross" },
-    { value: "star", displayName: "Star" }
+    { value: "star", displayName: "Star" },
+    { value: "line", displayName: "Line" }
 ];
 
 export const LEGEND_POSITION_ITEMS: powerbi.IEnumMember[] = [

@@ -382,22 +382,37 @@ export class Visual implements IVisual {
             const shape = marker.shape.value.value as string;
             const size = marker.size.value;
             const color = marker.color.value.value;
-            const symbolType = MARKER_SYMBOLS[shape] || d3.symbolCircle;
-            const symbolGenerator = d3.symbol().type(symbolType).size(size * size * 1.6);
 
             const markerData = categories
                 .map((cat, i) => ({ cat, value: markerSeries.values[i] }))
                 .filter((d): d is { cat: string; value: number } => d.value !== null);
 
-            this.markersGroup.selectAll("path")
+            const markerGroups = this.markersGroup.selectAll<SVGGElement, { cat: string; value: number }>("g")
                 .data(markerData)
-                .join("path")
-                .attr("transform", d => `translate(${xScale(d.value)}, ${(yScale(d.cat) ?? 0) + yScale.bandwidth() / 2})`)
-                .attr("d", symbolGenerator)
-                .attr("fill", color)
-                .attr("stroke", "#fff")
-                .attr("stroke-width", 1)
-                .append("title")
+                .join("g")
+                .attr("transform", d => `translate(${xScale(d.value)}, ${(yScale(d.cat) ?? 0) + yScale.bandwidth() / 2})`);
+
+            if (shape === "line") {
+                // A short crosshair spanning (and slightly overshooting) the bar's band, like a target/threshold line.
+                const halfLength = yScale.bandwidth() / 2 + 4;
+                const strokeWidth = Math.max(1.5, size / 3);
+                markerGroups.append("line")
+                    .attr("y1", -halfLength)
+                    .attr("y2", halfLength)
+                    .attr("stroke", color)
+                    .attr("stroke-width", strokeWidth)
+                    .attr("stroke-linecap", "round");
+            } else {
+                const symbolType = MARKER_SYMBOLS[shape] || d3.symbolCircle;
+                const symbolGenerator = d3.symbol().type(symbolType).size(size * size * 1.6);
+                markerGroups.append("path")
+                    .attr("d", symbolGenerator)
+                    .attr("fill", color)
+                    .attr("stroke", "#fff")
+                    .attr("stroke-width", 1);
+            }
+
+            markerGroups.append("title")
                 .text(d => `${markerSeries.displayName}: ${d.value.toLocaleString()}`);
         }
 
