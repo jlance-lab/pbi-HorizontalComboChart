@@ -15,6 +15,8 @@ import DataView = powerbi.DataView;
 import DataViewValueColumn = powerbi.DataViewValueColumn;
 import ISandboxExtendedColorPalette = powerbi.extensibility.ISandboxExtendedColorPalette;
 import VisualTooltipDataItem = powerbi.extensibility.VisualTooltipDataItem;
+import ISelectionId = powerbi.visuals.ISelectionId;
+import ISelectionManager = powerbi.extensibility.ISelectionManager;
 
 import { VisualFormattingSettingsModel } from "./settings";
 
@@ -35,6 +37,7 @@ interface MarkerSeriesInfo {
 interface ParsedData {
     categories: string[];
     categoryDisplayName: string;
+    categorySelectionIds: ISelectionId[];
     barSeries: BarSeriesInfo[];
     markerSeries: MarkerSeriesInfo | null;
 }
@@ -57,11 +60,15 @@ function sanitizeClassName(name: string): string {
     return "s_" + (name || "series").replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
+const DIMMED_OPACITY = 0.35;
+
 export class Visual implements IVisual {
     private events: IVisualEventService;
     private host: IVisualHost;
     private target: HTMLElement;
     private colorPalette: ISandboxExtendedColorPalette;
+    private selectionManager: ISelectionManager;
+    private interactiveBindings: { selection: d3.Selection<d3.BaseType, any, any, any>; getId: (d: any) => ISelectionId }[] = [];
 
     private svg: d3.Selection<SVGSVGElement, unknown, null, undefined>;
     private legendGroup: GSelection;
@@ -81,6 +88,7 @@ export class Visual implements IVisual {
         this.colorPalette = options.host.colorPalette as ISandboxExtendedColorPalette;
         this.formattingSettingsService = new FormattingSettingsService();
         this.tooltipServiceWrapper = createTooltipServiceWrapper(options.host.tooltipService, options.element);
+        this.selectionManager = options.host.createSelectionManager();
         this.target = options.element;
 
         this.svg = d3.select(this.target)
@@ -93,6 +101,23 @@ export class Visual implements IVisual {
         this.barsGroup = this.svg.append("g").attr("class", "bars");
         this.markersGroup = this.svg.append("g").attr("class", "markers");
         this.titlesGroup = this.svg.append("g").attr("class", "titles");
+
+        // Keep rendered opacity in sync when selection changes for a reason other than
+        // clicking a data point in this visual instance (e.g. a bookmark or "Clear selection").
+        this.selectionManager.registerOnSelectCallback(ids => {
+            this.applySelectionStyles(ids as ISelectionId[]);
+        });
+
+        // Clicking empty canvas clears the selection, matching built-in visuals.
+        this.svg.on("click", () => {
+            if (!this.isInteractive()) { return; }
+            this.selectionManager.clear().then(() => this.applySelectionStyles([]));
+        });
+        this.svg.on("contextmenu", (event: MouseEvent) => {
+            if (!this.isInteractive()) { return; }
+            event.preventDefault();
+            this.selectionManager.showContextMenu({}, { x: event.clientX, y: event.clientY });
+        });
     }
 
     public update(options: VisualUpdateOptions): void {
@@ -164,7 +189,47 @@ export class Visual implements IVisual {
             }
         });
 
-        return { categories, categoryDisplayName: categoryColumn.source.displayName, barSeries, markerSeries };
+        const categorySelectionIds = categories.map((_, i) =>
+            this.host.createSelectionIdBuilder().withCategory(categoryColumn, i).createSelectionId()
+        );
+
+        return { categories, categoryDisplayName: categoryColumn.source.displayName, categorySelectionIds, barSeries, markerSeries };
+    }
+
+    private isInteractive(): boolean {
+        return this.host.hostCapabilities.allowInteractions !== false;
+    }
+
+    private currentOpacity(id: ISelectionId, selectedIds: ISelectionId[]): number {
+        if (!selectedIds.length) { return 1; }
+        return selectedIds.some(selected => selected.equals(id)) ? 1 : DIMMED_OPACITY;
+    }
+
+    /** Re-applies opacity to every rendered data point without a full re-render, so selection feedback is instant. */
+    private applySelectionStyles(selectedIds: ISelectionId[] = this.selectionManager.getSelectionIds() as ISelectionId[]): void {
+        this.interactiveBindings.forEach(({ selection, getId }) => {
+            selection.style("opacity", (d: unknown) => this.currentOpacity(getId(d), selectedIds));
+        });
+    }
+
+    /** Attaches click-to-select and right-click context menu behavior to a rendered selection, keyed by a per-datum selection ID. */
+    private wireInteractivity<T>(selection: d3.Selection<d3.BaseType, T, any, any>, getId: (d: T) => ISelectionId): void {
+        this.interactiveBindings.push({ selection, getId });
+
+        if (!this.isInteractive()) { return; }
+
+        selection
+            .style("cursor", "pointer")
+            .on("click", (event: MouseEvent, d: T) => {
+                event.stopPropagation();
+                this.selectionManager.select(getId(d), event.ctrlKey || event.metaKey)
+                    .then(ids => this.applySelectionStyles(ids as ISelectionId[]));
+            })
+            .on("contextmenu", (event: MouseEvent, d: T) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.selectionManager.showContextMenu(getId(d), { x: event.clientX, y: event.clientY });
+            });
     }
 
     private getSeriesColor(column: DataViewValueColumn, index: number): string {
@@ -193,8 +258,9 @@ export class Visual implements IVisual {
 
     private render(parsed: ParsedData, width: number, height: number): void {
         this.clear();
+        this.interactiveBindings = [];
 
-        const { categories, barSeries, markerSeries } = parsed;
+        const { categories, categorySelectionIds, barSeries, markerSeries } = parsed;
         if (!categories.length || (!barSeries.length && !markerSeries)) {
             return;
         }
@@ -336,11 +402,11 @@ export class Visual implements IVisual {
         if (stacked) {
             const stackKeys = barSeries.map(s => s.queryName);
             const stackData = categories.map((cat, i) => {
-                const row: { [key: string]: number | string } = { category: cat };
+                const row: { [key: string]: number | string | ISelectionId } = { category: cat, selectionId: categorySelectionIds[i] };
                 barSeries.forEach(s => { row[s.queryName] = s.values[i] || 0; });
                 return row;
             });
-            const stackGen = d3.stack<{ [key: string]: number | string }>().keys(stackKeys).offset(d3.stackOffsetDiverging);
+            const stackGen = d3.stack<{ [key: string]: number | string | ISelectionId }>().keys(stackKeys).offset(d3.stackOffsetDiverging);
             const series = stackGen(stackData);
 
             series.forEach((seriesData, sIndex) => {
@@ -356,10 +422,11 @@ export class Visual implements IVisual {
                     .attr("width", d => Math.abs(xScale(d[1]) - xScale(d[0])))
                     .attr("fill", info.color);
 
-                this.tooltipServiceWrapper.addTooltip(barSelection, (d: d3.SeriesPoint<{ [key: string]: number | string }>): VisualTooltipDataItem[] => [
+                this.tooltipServiceWrapper.addTooltip(barSelection, (d: d3.SeriesPoint<{ [key: string]: number | string | ISelectionId }>): VisualTooltipDataItem[] => [
                     { displayName: defaultCategoryAxisTitle, value: String(d.data.category) },
                     { displayName: info.displayName, value: (d[1] - d[0]).toLocaleString(), color: info.color }
                 ]);
+                this.wireInteractivity(barSelection, d => d.data.selectionId as ISelectionId);
             });
         } else {
             const innerScale = d3.scaleBand<string>()
@@ -368,7 +435,7 @@ export class Visual implements IVisual {
                 .padding(0.1);
 
             barSeries.forEach(info => {
-                const barData = categories.map((cat, i) => ({ cat, value: info.values[i] || 0 }));
+                const barData = categories.map((cat, i) => ({ cat, value: info.values[i] || 0, selectionId: categorySelectionIds[i] }));
                 const barSelection = this.barsGroup.append("g")
                     .attr("class", sanitizeClassName(info.queryName))
                     .selectAll("rect")
@@ -384,6 +451,7 @@ export class Visual implements IVisual {
                     { displayName: defaultCategoryAxisTitle, value: d.cat },
                     { displayName: info.displayName, value: d.value.toLocaleString(), color: info.color }
                 ]);
+                this.wireInteractivity(barSelection, d => d.selectionId);
             });
         }
 
@@ -394,10 +462,10 @@ export class Visual implements IVisual {
             const color = marker.color.value.value;
 
             const markerData = categories
-                .map((cat, i) => ({ cat, value: markerSeries.values[i] }))
-                .filter((d): d is { cat: string; value: number } => d.value !== null);
+                .map((cat, i) => ({ cat, value: markerSeries.values[i], selectionId: categorySelectionIds[i] }))
+                .filter((d): d is { cat: string; value: number; selectionId: ISelectionId } => d.value !== null);
 
-            const markerGroups = this.markersGroup.selectAll<SVGGElement, { cat: string; value: number }>("g")
+            const markerGroups = this.markersGroup.selectAll<SVGGElement, { cat: string; value: number; selectionId: ISelectionId }>("g")
                 .data(markerData)
                 .join("g")
                 .attr("transform", d => `translate(${xScale(d.value)}, ${(yScale(d.cat) ?? 0) + yScale.bandwidth() / 2})`);
@@ -426,7 +494,10 @@ export class Visual implements IVisual {
                 { displayName: defaultCategoryAxisTitle, value: d.cat },
                 { displayName: markerSeries.displayName, value: d.value.toLocaleString(), color }
             ]);
+            this.wireInteractivity(markerGroups, d => d.selectionId);
         }
+
+        this.applySelectionStyles();
 
         // ---- axis titles ----
         if (valAxis.show.value && valAxis.showTitle.value && valueAxisTitle) {
