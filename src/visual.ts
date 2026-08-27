@@ -3,6 +3,7 @@
 import powerbi from "powerbi-visuals-api";
 import * as d3 from "d3";
 import { formattingSettings, FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
+import { createTooltipServiceWrapper, ITooltipServiceWrapper } from "powerbi-visuals-utils-tooltiputils";
 import "./../style/visual.less";
 
 import VisualConstructorOptions = powerbi.extensibility.visual.VisualConstructorOptions;
@@ -13,6 +14,7 @@ import IVisualHost = powerbi.extensibility.visual.IVisualHost;
 import DataView = powerbi.DataView;
 import DataViewValueColumn = powerbi.DataViewValueColumn;
 import ISandboxExtendedColorPalette = powerbi.extensibility.ISandboxExtendedColorPalette;
+import VisualTooltipDataItem = powerbi.extensibility.VisualTooltipDataItem;
 
 import { VisualFormattingSettingsModel } from "./settings";
 
@@ -71,12 +73,14 @@ export class Visual implements IVisual {
 
     private formattingSettings: VisualFormattingSettingsModel;
     private formattingSettingsService: FormattingSettingsService;
+    private tooltipServiceWrapper: ITooltipServiceWrapper;
 
     constructor(options: VisualConstructorOptions) {
         this.events = options.host.eventService;
         this.host = options.host;
         this.colorPalette = options.host.colorPalette as ISandboxExtendedColorPalette;
         this.formattingSettingsService = new FormattingSettingsService();
+        this.tooltipServiceWrapper = createTooltipServiceWrapper(options.host.tooltipService, options.element);
         this.target = options.element;
 
         this.svg = d3.select(this.target)
@@ -341,7 +345,7 @@ export class Visual implements IVisual {
 
             series.forEach((seriesData, sIndex) => {
                 const info = barSeries[sIndex];
-                this.barsGroup.append("g")
+                const barSelection = this.barsGroup.append("g")
                     .attr("class", sanitizeClassName(info.queryName))
                     .selectAll("rect")
                     .data(seriesData)
@@ -350,9 +354,12 @@ export class Visual implements IVisual {
                     .attr("height", yScale.bandwidth())
                     .attr("x", d => xScale(Math.min(d[0], d[1])))
                     .attr("width", d => Math.abs(xScale(d[1]) - xScale(d[0])))
-                    .attr("fill", info.color)
-                    .append("title")
-                    .text(d => `${info.displayName}: ${(d[1] - d[0]).toLocaleString()}`);
+                    .attr("fill", info.color);
+
+                this.tooltipServiceWrapper.addTooltip(barSelection, (d: d3.SeriesPoint<{ [key: string]: number | string }>): VisualTooltipDataItem[] => [
+                    { displayName: defaultCategoryAxisTitle, value: String(d.data.category) },
+                    { displayName: info.displayName, value: (d[1] - d[0]).toLocaleString(), color: info.color }
+                ]);
             });
         } else {
             const innerScale = d3.scaleBand<string>()
@@ -362,7 +369,7 @@ export class Visual implements IVisual {
 
             barSeries.forEach(info => {
                 const barData = categories.map((cat, i) => ({ cat, value: info.values[i] || 0 }));
-                this.barsGroup.append("g")
+                const barSelection = this.barsGroup.append("g")
                     .attr("class", sanitizeClassName(info.queryName))
                     .selectAll("rect")
                     .data(barData)
@@ -371,9 +378,12 @@ export class Visual implements IVisual {
                     .attr("height", Math.max(1, innerScale.bandwidth()))
                     .attr("x", d => xScale(Math.min(0, d.value)))
                     .attr("width", d => Math.abs(xScale(d.value) - zeroX))
-                    .attr("fill", info.color)
-                    .append("title")
-                    .text(d => `${info.displayName}: ${d.value.toLocaleString()}`);
+                    .attr("fill", info.color);
+
+                this.tooltipServiceWrapper.addTooltip(barSelection, (d: { cat: string; value: number }): VisualTooltipDataItem[] => [
+                    { displayName: defaultCategoryAxisTitle, value: d.cat },
+                    { displayName: info.displayName, value: d.value.toLocaleString(), color: info.color }
+                ]);
             });
         }
 
@@ -412,8 +422,10 @@ export class Visual implements IVisual {
                     .attr("stroke-width", 1);
             }
 
-            markerGroups.append("title")
-                .text(d => `${markerSeries.displayName}: ${d.value.toLocaleString()}`);
+            this.tooltipServiceWrapper.addTooltip(markerGroups, (d: { cat: string; value: number }): VisualTooltipDataItem[] => [
+                { displayName: defaultCategoryAxisTitle, value: d.cat },
+                { displayName: markerSeries.displayName, value: d.value.toLocaleString(), color }
+            ]);
         }
 
         // ---- axis titles ----
