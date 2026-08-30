@@ -71,6 +71,7 @@ export class Visual implements IVisual {
     private interactiveBindings: { selection: d3.Selection<d3.BaseType, any, any, any>; getId: (d: any) => ISelectionId }[] = [];
 
     private svg: d3.Selection<SVGSVGElement, unknown, null, undefined>;
+    private landingPage: d3.Selection<HTMLDivElement, unknown, null, undefined>;
     private legendGroup: GSelection;
     private xAxisGroup: GSelection;
     private yAxisGroup: GSelection;
@@ -90,6 +91,18 @@ export class Visual implements IVisual {
         this.tooltipServiceWrapper = createTooltipServiceWrapper(options.host.tooltipService, options.element);
         this.selectionManager = options.host.createSelectionManager();
         this.target = options.element;
+
+        this.landingPage = d3.select(this.target)
+            .append("div")
+            .attr("class", "landingPage")
+            .style("display", "none");
+        this.landingPage.append("div").attr("class", "landingPage-title").text("Horizontal combo chart");
+        const landingPageSteps = this.landingPage.append("ul").attr("class", "landingPage-steps");
+        [
+            "Add a field to Category",
+            "Add one or more fields to Y-axis (bars)",
+            "Optionally add a field to Markers for a target/threshold indicator"
+        ].forEach(step => landingPageSteps.append("li").text(step));
 
         this.svg = d3.select(this.target)
             .append("svg")
@@ -132,11 +145,18 @@ export class Visual implements IVisual {
             this.svg.attr("width", width).attr("height", height);
 
             const hasCategories = !!(dataView && dataView.categorical && dataView.categorical.categories && dataView.categorical.categories.length);
-            if (!hasCategories) {
+            const valueColumns = (dataView && dataView.categorical && dataView.categorical.values) || [];
+            const hasMeasureOrMarker = valueColumns.some(column => column.source.roles && (column.source.roles["measure"] || column.source.roles["marker"]));
+
+            if (!hasCategories || !hasMeasureOrMarker) {
                 this.clear();
+                this.svg.style("display", "none");
+                this.landingPage.style("display", "flex");
                 this.events.renderingFinished(options);
                 return;
             }
+            this.landingPage.style("display", "none");
+            this.svg.style("display", "block");
 
             const parsed = this.parseData(dataView);
             this.buildDynamicColorSlices(parsed.barSeries);
