@@ -18,6 +18,7 @@
     "d3": "7.9.0",
     "powerbi-visuals-api": "5.11.1",
     "powerbi-visuals-utils-formattingmodel": "6.0.4",
+    "powerbi-visuals-utils-formattingutils": "^6.1.2",
     "powerbi-visuals-utils-tooltiputils": "^7.0.0"
   },
   "devDependencies": {

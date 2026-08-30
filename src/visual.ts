@@ -4,6 +4,7 @@ import powerbi from "powerbi-visuals-api";
 import * as d3 from "d3";
 import { formattingSettings, FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
 import { createTooltipServiceWrapper, ITooltipServiceWrapper } from "powerbi-visuals-utils-tooltiputils";
+import { valueFormatter } from "powerbi-visuals-utils-formattingutils";
 import "./../style/visual.less";
 
 import VisualConstructorOptions = powerbi.extensibility.visual.VisualConstructorOptions;
@@ -27,11 +28,15 @@ interface BarSeriesInfo {
     displayName: string;
     color: string;
     values: number[];
+    format: string;
+    formatter: valueFormatter.IValueFormatter;
 }
 
 interface MarkerSeriesInfo {
     displayName: string;
     values: (number | null)[];
+    format: string;
+    formatter: valueFormatter.IValueFormatter;
 }
 
 interface ParsedData {
@@ -193,18 +198,24 @@ export class Visual implements IVisual {
         (categorical.values || []).forEach((column: DataViewValueColumn, index: number) => {
             const roles = column.source.roles || {};
             const values = column.values.map(v => (v === null || v === undefined || isNaN(Number(v))) ? null : Number(v));
+            const format = valueFormatter.getFormatStringByColumn(column.source) || undefined;
+            const formatter = valueFormatter.create({ format });
 
             if (roles["marker"]) {
                 markerSeries = {
                     displayName: column.source.displayName,
-                    values
+                    values,
+                    format,
+                    formatter
                 };
             } else if (roles["measure"]) {
                 barSeries.push({
                     queryName: column.source.queryName,
                     displayName: column.source.displayName,
                     color: this.getSeriesColor(column, index),
-                    values: values.map(v => v === null ? 0 : v)
+                    values: values.map(v => v === null ? 0 : v),
+                    format,
+                    formatter
                 });
             }
         });
@@ -397,6 +408,14 @@ export class Visual implements IVisual {
             .nice()
             .range([plotLeft, plotRight]);
 
+        // Axis ticks use the first bound measure's format string (falling back to the marker's),
+        // with auto display-unit scaling (e.g. "20K") based on the domain's magnitude.
+        const axisFormatSource = (barSeries[0] && barSeries[0].format) || (markerSeries && markerSeries.format) || undefined;
+        const axisValueFormatter = valueFormatter.create({
+            format: axisFormatSource,
+            value: Math.max(Math.abs(domainStart), Math.abs(domainEnd)) || undefined
+        });
+
         // ---- axes ----
         if (catAxis.show.value) {
             const yAxis = d3.axisLeft(yScale).tickSizeOuter(0);
@@ -408,7 +427,24 @@ export class Visual implements IVisual {
         }
 
         if (valAxis.show.value) {
-            const xAxis = d3.axisBottom(xScale).tickSizeOuter(0);
+            // Thin out ticks so formatted labels (which can be much wider than a bare number,
+            // e.g. "$1,234.56") don't overlap when the visual is narrow, matching native visuals.
+            // d3's own `.ticks(n)` only aims for roughly n "nice" values and can overshoot, so the
+            // candidate list is explicitly capped via tickValues() to guarantee the fit.
+            const sampleLabelWidth = Math.max(
+                axisValueFormatter.format(domainStart).length,
+                axisValueFormatter.format(domainEnd).length,
+                axisValueFormatter.format((domainStart + domainEnd) / 2).length
+            ) * valAxis.fontSize.value * 0.62;
+            const maxTicks = Math.max(1, Math.floor((plotRight - plotLeft) / (sampleLabelWidth + 16)));
+
+            let tickValues = xScale.ticks(maxTicks);
+            if (tickValues.length > maxTicks) {
+                const step = Math.ceil(tickValues.length / maxTicks);
+                tickValues = tickValues.filter((_, i) => i % step === 0);
+            }
+
+            const xAxis = d3.axisBottom(xScale).tickSizeOuter(0).tickValues(tickValues).tickFormat(d => axisValueFormatter.format(d));
             this.xAxisGroup.attr("transform", `translate(0,${plotBottom})`).call(xAxis);
             this.xAxisGroup.selectAll("text")
                 .style("font-size", `${valAxis.fontSize.value}px`)
@@ -444,7 +480,7 @@ export class Visual implements IVisual {
 
                 this.tooltipServiceWrapper.addTooltip(barSelection, (d: d3.SeriesPoint<{ [key: string]: number | string | ISelectionId }>): VisualTooltipDataItem[] => [
                     { displayName: defaultCategoryAxisTitle, value: String(d.data.category) },
-                    { displayName: info.displayName, value: (d[1] - d[0]).toLocaleString(), color: info.color }
+                    { displayName: info.displayName, value: info.formatter.format(d[1] - d[0]), color: info.color }
                 ]);
                 this.wireInteractivity(barSelection, d => d.data.selectionId as ISelectionId);
             });
@@ -469,7 +505,7 @@ export class Visual implements IVisual {
 
                 this.tooltipServiceWrapper.addTooltip(barSelection, (d: { cat: string; value: number }): VisualTooltipDataItem[] => [
                     { displayName: defaultCategoryAxisTitle, value: d.cat },
-                    { displayName: info.displayName, value: d.value.toLocaleString(), color: info.color }
+                    { displayName: info.displayName, value: info.formatter.format(d.value), color: info.color }
                 ]);
                 this.wireInteractivity(barSelection, d => d.selectionId);
             });
@@ -512,7 +548,7 @@ export class Visual implements IVisual {
 
             this.tooltipServiceWrapper.addTooltip(markerGroups, (d: { cat: string; value: number }): VisualTooltipDataItem[] => [
                 { displayName: defaultCategoryAxisTitle, value: d.cat },
-                { displayName: markerSeries.displayName, value: d.value.toLocaleString(), color }
+                { displayName: markerSeries.displayName, value: markerSeries.formatter.format(d.value), color }
             ]);
             this.wireInteractivity(markerGroups, d => d.selectionId);
         }
