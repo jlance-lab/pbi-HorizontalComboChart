@@ -1,4 +1,6 @@
 {
+    "supportsLandingPage": true,
+    "supportsEmptyDataView": true,
     "dataRoles": [
         {
             "displayName": "Category",
